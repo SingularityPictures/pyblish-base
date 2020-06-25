@@ -67,6 +67,47 @@ def test_iterator():
     assert count["#"] == 101, count
 
 
+def test_iterator_with_explicit_targets():
+    """Iterator skips non-targeted plug-ins"""
+
+    count = {"#": 0}
+
+    class MyCollectorA(api.ContextPlugin):
+        order = api.CollectorOrder
+        targets = ["studio"]
+
+        def process(self, context):
+            count["#"] += 1
+
+    class MyCollectorB(api.ContextPlugin):
+        order = api.CollectorOrder
+
+        def process(self, context):
+            count["#"] += 10
+
+    class MyCollectorC(api.ContextPlugin):
+        order = api.CollectorOrder
+        targets = ["studio"]
+
+        def process(self, context):
+            count["#"] += 100
+
+    context = api.Context()
+    plugins = [MyCollectorA, MyCollectorB, MyCollectorC]
+
+    assert count["#"] == 0, count
+
+    for Plugin, instance in logic.Iterator(
+        plugins, context, targets=["studio"]
+    ):
+        assert Plugin.__name__ != "MyCollectorB"
+
+        plugin.process(Plugin, context, instance)
+
+    # Collector runs once, one Validator runs once
+    assert count["#"] == 101, count
+
+
 def test_register_gui():
     """Registering at run-time takes precedence over those from environment"""
 
@@ -185,3 +226,23 @@ def test_plugins_by_families():
 
     assert logic.plugins_by_families(
         [ClassD, ClassE, ClassF], ["a", "b", "c"]) == [ClassD, ClassE]
+
+
+@with_setup(lib.setup_empty, lib.teardown)
+def test_extracted_traceback_contains_correct_backtrace():
+    api.register_plugin_path(os.path.dirname(__file__))
+
+    context = api.Context()
+    context.create_instance('test instance')
+
+    plugins = api.discover()
+    plugins = [p for p in plugins if p.__name__ in
+               ('FailingExplicitPlugin', 'FailingImplicitPlugin')]
+    util.publish(context, plugins)
+
+    for result in context.data['results']:
+        assert result["error"].traceback[0] == plugins[0].__module__
+        formatted_tb = result['error'].formatted_traceback
+        assert formatted_tb.startswith('Traceback (most recent call last):\n')
+        assert formatted_tb.endswith('\nException: A test exception\n')
+        assert 'File "{0}",'.format(plugins[0].__module__) in formatted_tb

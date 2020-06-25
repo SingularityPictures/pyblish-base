@@ -31,6 +31,7 @@ from . import (
     _registered_hosts,
     _registered_paths,
     _registered_targets,
+    _registered_plugin_filters
 )
 
 from . import lib
@@ -521,8 +522,9 @@ def __explicit_process(plugin, context, instance=None, action=None):
         # http://stackoverflow.com/a/11417308/478949
         lib.emit("pluginFailed", plugin=plugin, context=context,
                  instance=instance, error=error)
-        lib.extract_traceback(error)
+        lib.extract_traceback(error, plugin.__module__)
         result["error"] = error
+        log.exception(result["error"].formatted_traceback)
 
     __end = time.time()
 
@@ -587,8 +589,9 @@ def __implicit_process(plugin, context, instance=None, action=None):
     except Exception as error:
         lib.emit("pluginFailed", plugin=plugin, context=context,
                  instance=instance, error=error)
-        lib.extract_traceback(error)
+        lib.extract_traceback(error, plugin.__module__)
         result["error"] = error
+        log.exception(result["error"].formatted_traceback)
 
     __end = time.time()
 
@@ -1194,6 +1197,48 @@ def registered_targets():
     return list(_registered_targets)
 
 
+def register_discovery_filter(callback):
+    """Register a new plugin filter
+
+    Arguments:
+        callback (func): Function to execute on filter during discovery,
+            takes the original of plugins to be edited in-place
+
+    Raises:
+        ValueError if `callback` is not callable.
+
+    """
+
+    if not callable(callback):
+        raise ValueError("%s is not callable" % callback)
+
+    _registered_plugin_filters.append(callback)
+
+
+def deregister_discovery_filter(callback):
+    """Deregister a plugin filter
+
+    Arguments:
+        callback (func): filtering function.
+
+    Raises:
+        ValueError on missing callback
+    """
+
+    _registered_plugin_filters.remove(callback)
+
+
+def deregister_all_discovery_filters():
+    """Deregisters all plugin filters"""
+    _registered_plugin_filters[:] = []
+
+
+def registered_discovery_filters():
+    """Returns registered plugin filter callbacks"""
+
+    return _registered_plugin_filters
+
+
 def environment_paths():
     """Return paths added via environment variable"""
 
@@ -1292,7 +1337,7 @@ def discover(type=None, regex=None, paths=None):
             module.__file__ = abspath
 
             try:
-                with open(abspath) as f:
+                with open(abspath, "rb") as f:
                     six.exec_(f.read(), module.__dict__)
 
                 # Store reference to original module, to avoid
@@ -1328,6 +1373,10 @@ def discover(type=None, regex=None, paths=None):
 
     plugins = list(plugins.values())
     sort(plugins)  # In-place
+
+    # In-place user-defined filter
+    for filter_ in _registered_plugin_filters:
+        filter_(plugins)
 
     return plugins
 
